@@ -116,7 +116,7 @@ image. Only per-user migrations remain.
 
 ## Layer 3: image (`image/`)
 
-- `image/Containerfile` starts `FROM quay.io/fedora/fedora-bootc:<ver>`,
+- `image/Containerfile` starts `FROM quay.io/fedora/fedora-bootc:44`,
   enables COPR `cedarlinux/cedar`, installs `cedar` and `cedar-settings` (which
   pull the rest), enables greeter and session units, and runs
   `bootc container lint`.
