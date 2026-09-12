@@ -20,10 +20,18 @@ repository, published to a registry, and installed by rebasing onto it.
 possible future, not the goal. This is the single most important line in this
 document, because it is what makes everything below small enough to finish.
 
-Explicitly out of scope, and not deferred but *declined*: an ISO, a graphical
-installer, Secure Boot signing, a full-disk-encryption design, an accessibility
+Explicitly out of scope, and not deferred but *declined*: an accessibility
 programme, localization beyond the author's own, a hardware support matrix, a
 CVE response policy, a support forum, and any comparison to Zorin or Mint.
+
+**A Cedar ISO is in scope**, because the artifact should be future-proof even
+while the audience is one person. "Install Fedora, then rebase" is fine for an
+afternoon and wrong for anything meant to last. It is affordable here only
+because the ISO is *generated from* the container image by existing tooling
+rather than assembled by hand — the work is CI configuration and boot testing,
+not installer development. Anaconda, partitioning and Secure Boot all come
+inherited. That is the difference between this and the Debian design, where the
+ISO would have meant live-build, Calamares, a signing story and a LUKS layout.
 
 If Cedar turns out to be good and someone else wants it, those become real
 questions then, with evidence. Taking them on now costs a year and answers
@@ -81,15 +89,66 @@ cedar/
   desktop/           COSMIC config: panel, dock, applets, keybinds, defaults
   theme/             cedar-theme: the engine, plus shipped themes
   apps/              Flatpak manifest list, dnf layer list
-  Justfile           build, test in a VM, rebase
-  .github/           build and push on every commit to main
+  iso/               ISO build config: Titanoboa / image-builder, kickstart
+  Justfile           build, test in a VM, build ISO, rebase
+  .github/           build and push image on main; build ISO on tag
 ```
 
-**Build and install.** GitHub Actions builds the image and pushes to
-`ghcr.io`. Installing is `rpm-ostree rebase` onto that image; updating is a
-reboot. A bad build is recovered by booting the previous deployment, which
-Fedora Atomic keeps automatically — no snapper, no `grub-btrfs`, none of the
-machinery the Debian design needed and could not get.
+### One image, two ways to consume it
+
+The container image is the single source of truth. It is consumed two ways:
+
+```
+Containerfile  ──CI──▶  ghcr.io/cedarlinux/cedar:latest
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+                Cedar ISO          rpm-ostree rebase
+           (fresh installs)     (machines already on Cedar)
+```
+
+**Cedar ships its own ISO from the start.** Telling someone to install Fedora
+first and then rebase is acceptable for one user on one afternoon and wrong for
+anything meant to last. The ISO carries Cedar's bootloader entries, Cedar's
+Plymouth and Cedar's branding, and it is what any future user — including the
+author on a new machine — actually installs.
+
+**The ISO is generated, not separately built.** Universal Blue's **Titanoboa**
+produces live ISOs directly from bootc container images, and
+`build-container-installer` produces traditional installer ISOs; Bazzite ships
+both from GitHub Actions. Fedora is separately migrating Atomic Desktop ISOs
+from lorax to osbuild's **image-builder**, which is the official alternative and
+the one to prefer if Fedora's tooling converges there.
+
+Note: `bootc-image-builder` was **archived in June 2026** and must not be used.
+
+Crucially, these tools expect *all* customization — bootloader entries, kernel
+arguments, branding, preinstalled Flatpaks — to live inside the container image.
+So Cedar is branded once, in the Containerfile, and the ISO inherits it. There
+is no second branding pipeline.
+
+**Updates.** Machines already running Cedar do not reinstall; `rpm-ostree
+upgrade` pulls the new image and a reboot applies it. A bad build is recovered
+by booting the previous deployment, which Fedora Atomic keeps automatically — no
+snapper, no `grub-btrfs`, none of the machinery the Debian design needed and
+could not get.
+
+### Secure Boot
+
+Cedar's ISO boots on stock hardware with Secure Boot enabled, at no cost and
+with no process. Fedora's own documentation states that a remix shipping
+Fedora's shim, grub2 and kernel **unchanged** will boot on Secure Boot machines.
+Cedar never rebuilds any of the three.
+
+This is therefore a **hard constraint, not merely a convenience**: Cedar must
+never rebuild or replace shim, grub2 or the kernel. Branding may change GRUB's
+appearance through theme files and configuration, never by rebuilding the signed
+EFI binary. Secure Boot was a blocker in the Debian design; here it is
+inherited, and the only way to lose it is to break this rule.
+
+NVIDIA's DKMS modules remain the exception — they are unsigned and still require
+MOK enrollment at a firmware prompt. That is a one-time annoyance for a single
+user and a real problem if Cedar ever has general users.
 
 **Branding.** Baked into the image rather than patched onto a running system:
 `/etc/os-release`, `/etc/issue`, `GRUB_DISTRIBUTOR`, the Plymouth theme, the
@@ -159,18 +218,30 @@ philosophy is needed beyond that, because there is no one else to serve.
 ## Milestones
 
 1. **It boots and it is Cedar.** Containerfile builds from `cosmic-atomic:44`,
-   branding baked in, CI publishing to `ghcr.io`, rebased onto real hardware or
-   a VM. Output: a system that says Cedar and that the author can log into.
-2. **It is the desktop.** `desktop/` carries the panel, dock, applet and
-   keybinding configuration. Output: the layout is right without touching
-   settings after install.
-3. **It is themed.** `cedar-theme` generates COSMIC, GTK and Qt from one
+   branding baked in, CI publishing to `ghcr.io`, rebased onto a VM. Output: a
+   system that says Cedar and that the author can log into. Also the moment to
+   check which COSMIC version Fedora 44 actually ships (see Open items).
+2. **It installs from a Cedar ISO.** CI generates the ISO from the image via
+   Titanoboa or image-builder, published to GitHub releases with checksums.
+   Verified to boot **with Secure Boot enabled** on real hardware, and to
+   install cleanly. Output: Cedar installs on a blank machine with no mention
+   of Fedora anywhere the user looks.
+3. **It is the desktop.** `desktop/` carries the panel, dock, applet and
+   keybinding configuration. Output: the layout is right on first login without
+   touching settings.
+4. **It is themed.** `cedar-theme` generates COSMIC, GTK and Qt from one
    palette; two or three themes ship; switching works. Output: everything on
    screen matches, including non-COSMIC apps.
-4. **It is the daily driver.** The author uses Cedar as their primary desktop
+5. **It is the daily driver.** The author uses Cedar as their primary desktop
    for a month and fixes what that reveals.
 
-Only after milestone 4 is it worth asking whether anyone else should have it.
+The ISO comes second deliberately. It is the piece most likely to rot if left
+until the end, it is what makes Cedar reinstallable on a whim while the design
+is still moving, and getting Secure Boot verified early means discovering any
+violation of the never-rebuild-the-boot-chain rule while there is little to
+unpick.
+
+Only after milestone 5 is it worth asking whether anyone else should have it.
 
 ## What the review established
 
