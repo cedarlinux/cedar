@@ -142,7 +142,19 @@ podman run --rm --platform=linux/amd64 \
   find /usr/lib/bootupd /usr/lib/ostree-boot -maxdepth 4
 ```
 
-Expected: trees under `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`. Note the actual paths — Task 4's script hardcodes them, and they must match.
+> **Answered by Task 1, and the answer was not what this step expected.** This
+> step originally predicted trees under `/usr/lib/bootupd/updates/EFI/` and
+> `/usr/lib/ostree-boot/efi/EFI/`. Both are wrong: the first holds only
+> `EFI.json`/`BIOS.json` metadata, and the second is an **empty directory**. The
+> signed payload is at `/usr/lib/efi/grub2/<evr>/EFI/fedora/` and
+> `/usr/lib/efi/shim/<evr>/EFI/{BOOT,fedora}/`. Task 4 has been corrected
+> accordingly. Kept here as a record of why this verification step exists: had
+> Task 4 run against the predicted paths, the guard would have hashed an empty
+> directory and two metadata files, found them identical, and reported the Secure
+> Boot payload verified — failing open on the one check this milestone exists to
+> make.
+
+Note the actual paths — Task 4's script walks them, and they must match.
 
 - [ ] **Step 6: Confirm `/etc/os-release` is a symlink and `bootc` is present**
 
@@ -508,15 +520,28 @@ set -euo pipefail
 IMAGE="${1:?usage: boot-chain.sh <image>}"
 BASE="${CEDAR_BASE:?set CEDAR_BASE to the digest-pinned base from Task 1}"
 PLATFORM="${PLATFORM:-linux/amd64}"
-MIN_FILES=6   # a sane payload has far more; this floor catches empty output
+MIN_FILES=12   # observed count is ~26; this floor catches a partial result
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
+# Paths verified against the real image in Task 1. Do NOT substitute the
+# "obvious" ones: /usr/lib/ostree-boot/efi is EMPTY in this image, and
+# /usr/lib/bootupd/updates/{EFI,BIOS}.json are metadata, not binaries. The
+# signed payload lives under /usr/lib/efi/{grub2,shim}/<rpm-evr>/EFI/, where
+# the <rpm-evr> segment drifts with package updates — which is why this walks
+# the whole /usr/lib/efi tree rather than globbing a version into a path.
+#
+# /usr/lib/bootupd/updates/*.json IS hashed: it is bootupd's manifest and
+# records the payload versions (grub2-1:2.12-64.fc44,shim-16.1-5), so a
+# version change trips the guard even if a binary somehow hashed the same.
+#
+# /usr/lib/bootupd/grub2-static/ is deliberately NOT hashed: those are GRUB
+# config fragments, not signed binaries, and Cedar may legitimately edit them.
 manifest() {
   podman run --rm --platform="$PLATFORM" --entrypoint "" "$1" sh -c '
     set -e
-    find /usr/lib/bootupd/updates /usr/lib/ostree-boot/efi \
-         -type f -exec sha256sum {} +
+    find /usr/lib/efi -type f -exec sha256sum {} +
+    sha256sum /usr/lib/bootupd/updates/*.json
     for k in /usr/lib/modules/*/; do
       sha256sum "$k"vmlinuz "$k"initramfs.img
     done
