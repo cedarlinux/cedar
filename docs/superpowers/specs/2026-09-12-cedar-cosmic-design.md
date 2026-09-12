@@ -331,6 +331,16 @@ Findings from the five-agent review of the previous design that still apply:
 
 **Still open:**
 
+- **Cedar's visual identity is undecided.** The dark-green palette
+  (`#1B3A34`, `#5D8A6B`, `#7FC9A6`) and the logo that appear in the milestone 1
+  plan were invented by the assistant while drafting, not chosen. They exist so
+  the branding plumbing can be built and tested. The real identity — palette,
+  logo, wordmark, default wallpaper, boot splash — is a deliberate design
+  decision still to be made. **Deadline: before the milestone 2 ISO**, because
+  after that, changing it means republishing the image, the Plymouth theme and
+  the installer. For a project whose entire premise is that it looks better
+  than the alternatives, this is not a detail to inherit by accident.
+
 - Upstream COSMIC releases roughly weekly. The churn is in `cosmic-comp` rather
   than the schemas Cedar writes, but the mitigation should be built early: pin
   the base image by digest, and add a CI check that diffs the shipped

@@ -611,6 +611,19 @@ it can never fail open."
 - Consumes: `check`, `check_file_exists`.
 - Produces: wallpaper and logo on disk, and a `cedar` Plymouth theme set as default with a regenerated initramfs.
 
+> ### ⚠ Cedar's visual identity is NOT decided
+>
+> The greens (`#1B3A34`, `#5D8A6B`, `#7FC9A6`), the logo, and the `ANSI_COLOR`
+> value in os-release were **invented by the assistant while drafting**, not
+> chosen by the project owner. They are placeholders carried forward only so
+> the plumbing can be built and tested.
+>
+> **Do not treat them as settled, and do not add more artwork derived from
+> them.** The identity is a separate decision, to be taken deliberately before
+> the milestone 2 ISO — after which changing it means republishing the image,
+> the Plymouth theme and the installer. Every file below is intentionally
+> trivial to replace.
+
 Wallpaper *design* is not this milestone's job — a solid colour placeholder is fine. This task proves the plumbing.
 
 - [ ] **Step 1: Write the failing tests**
