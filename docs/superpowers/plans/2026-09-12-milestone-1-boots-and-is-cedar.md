@@ -791,7 +791,14 @@ to:
       sha256sum "$k"vmlinuz
 ```
 
-Then re-run: expected exit 0.
+**And lower `MIN_FILES` from 17 to 16 in the same edit** — dropping
+`initramfs.img` drops the count by exactly one (13 files under `/usr/lib/efi`,
+2 bootupd manifests, `vmlinuz`). Leave the floor at 17 and the guard exits **2**
+reporting itself broken, which looks like Task 5 having damaged it. Update the
+comment's stated count too; that comment is the floor's only justification, and
+a stale number here is the same defect Task 4's fix round corrected.
+
+Then re-run: expected exit 0 with 16 files.
 
 - [ ] **Step 7: Commit**
 
