@@ -1,5 +1,10 @@
 # Cedar — Design
 
+> **SUPERSEDED (2026-09-12).** This design described Cedar as an Omarchy
+> fork on Fedora bootc with Hyprland and Quickshell. It is withdrawn in full:
+> the base, desktop, delivery mechanism and target audience all changed. See
+> `2026-09-12-cedar-design.md`. Kept for the reasoning it records.
+
 Date: 2026-09-09
 Status: approved for planning (revised after three independent reviews)
 
