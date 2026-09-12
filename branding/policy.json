@@ -5,7 +5,7 @@
       "ghcr.io/cedarlinux/cedar": [
         {
           "type": "sigstoreSigned",
-          "keyPath": "/usr/etc/pki/containers/cedar.pub",
+          "keyPath": "/etc/pki/containers/cedar.pub",
           "signedIdentity": { "type": "matchRepository" }
         }
       ]

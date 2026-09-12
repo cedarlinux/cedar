@@ -8,7 +8,18 @@ on:
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  # Push and sign are separate steps below. Cancelling an in-progress push
+  # workflow mid-flight can leave :44/:latest pushed but unsigned, which
+  # breaks `ostree-image-signed:` rebases for everyone until the next build
+  # completes. Only cancel in-progress PR runs, where nothing is pushed.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# There is deliberately no `schedule:` trigger here. A naive weekly rebuild
+# would be a no-op: FROM is pinned by digest (see the Containerfile), so
+# nothing would actually update and the run would just mint and push a new,
+# functionally identical multi-GB image to every Cedar machine. The right
+# scheduled job is one that opens a PR bumping the pinned FROM digest — that
+# is deliberately not yet implemented.
 
 env:
   IMAGE_NAME: cedar
@@ -24,7 +35,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: true
           large-packages: false
@@ -70,16 +81,46 @@ jobs:
             "docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:44")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      # Pinned to v2.4.3, NOT v3: cosign 3.x attaches signatures as OCI
+      # referrers only. containers/image (which `rpm-ostree rebase
+      # ostree-image-signed:` uses) resolves signatures via the legacy
+      # sha256-<digest>.sig tag, which cosign 3 cannot write. Do not "update"
+      # this to v3 without first confirming containers/image reads referrers.
       - uses: sigstore/cosign-installer@v3
         if: github.event_name != 'pull_request'
+        with:
+          cosign-release: 'v2.4.3'
 
       - name: Sign by digest
         if: github.event_name != 'pull_request'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          # cosign reads the terminal for a passphrase prompt when this is
+          # unset. A runner has no terminal, so cosign dies with "operation
+          # not supported by device". The signing key was generated with an
+          # empty password.
+          COSIGN_PASSWORD: ""
         run: |
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
             "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+
+      # The only thing that actually proves the signature is usable: verify
+      # the pushed digest through Cedar's OWN policy files (the same
+      # policy.json/cedar.pub/ghcr.yaml the image ships to end users), not
+      # cosign's own verify command. If this fails, a Cedar machine's
+      # `rpm-ostree rebase ostree-image-signed:` would fail too.
+      - name: Verify published image against Cedar's own policy
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          DEST="$(mktemp -d)"
+          skopeo copy \
+            --policy branding/policy.json \
+            --registries.d branding \
+            "docker://${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}" \
+            "dir:${DEST}"
+          rm -rf "${DEST}"
+          echo "Signature verifies under Cedar's shipped policy."
 
   # A reset of the package's visibility is silent and breaks every user's
   # rebase. Catch it here instead.

@@ -154,7 +154,8 @@ shim and grub2 RPM content lands in `/usr` — inside the ostree commit — and
 **never touches the EFI system partition**. `rpm-ostree rebase` rewrites only
 `grub.cfg` and the boot entries; every other file on the ESP is the one the
 installer wrote. Cedar's signed payload therefore lives at
-`/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`, and it
+`/usr/lib/efi/grub2/<rpm-evr>/EFI/fedora/` and
+`/usr/lib/efi/shim/<rpm-evr>/EFI/{BOOT,fedora}/`, and it
 reaches the ESP by exactly two routes: **`bootupctl`** (bootloader updates are
 enabled by default on Fedora Atomic Desktops) and **an installer** — which is
 milestone 2's ISO.
@@ -165,8 +166,11 @@ Three consequences:
   from the ESP the installer wrote. Rebasing validates the **kernel** signature
   path only.
 - The payload must therefore be verified by **comparing bytes** — digests of
-  those two trees plus `vmlinuz` and `initramfs.img`, against the base image.
-  Comparing RPM package versions is not sufficient, and `rpm -V` is useless
+  those two trees plus `vmlinuz`, against the base image. `initramfs.img` is
+  deliberately NOT hashed: Cedar regenerates it (for the Plymouth theme) and
+  it is not a signed EFI binary, so a guard that hashed it would flag Cedar's
+  own legitimate branding as a Secure Boot break. Comparing RPM package
+  versions is not sufficient, and `rpm -V` is useless
   here: ostree normalises every file mtime to zero, so `rpm -V` reports every
   file as modified on a pristine image.
 - **GRUB branding has a hard limit.** Since GRUB 2.06, `insmod` is prohibited

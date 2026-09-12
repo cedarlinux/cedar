@@ -75,9 +75,13 @@ RUN set -eux; \
 
 # Signature verification policy. Ships in the image so that `rpm-ostree rebase
 # ostree-image-signed:` works on a running Cedar system.
-COPY cosign.pub /usr/etc/pki/containers/cedar.pub
-COPY branding/policy.json /usr/etc/containers/policy.json
-COPY branding/ghcr.yaml /usr/etc/containers/registries.d/ghcr.yaml
+#
+# Destinations are /etc, not /usr/etc: on ostree, content this image places in
+# /etc becomes /usr/etc at deploy time. Writing /usr/etc directly is an ostree
+# implementation detail `bootc container lint` rejects.
+COPY cosign.pub /etc/pki/containers/cedar.pub
+COPY branding/policy.json /etc/containers/policy.json
+COPY branding/ghcr.yaml /etc/containers/registries.d/ghcr.yaml
 
 # bootc container lint MUST be the last instruction — it validates the final
 # filesystem. Anything added below it goes unlinted.

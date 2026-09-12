@@ -36,13 +36,38 @@ check_file_exists "Cedar logo installed" \
 check_file_exists "Cedar plymouth theme exists" \
   /usr/share/plymouth/themes/cedar/cedar.plymouth
 check "plymouth default theme is cedar" "cedar" plymouth-set-default-theme
-check "initramfs regenerated in /usr/lib/modules" "initramfs.img" \
-  sh -c 'ls /usr/lib/modules/*/initramfs.img'
+# NOT "does initramfs.img exist" — the untouched base already ships one, so
+# that check is a tautology that stays green even if `--add ostree` were
+# dropped from the Containerfile's dracut invocation and the image were left
+# unbootable. This instead inspects the regenerated initramfs's actual
+# contents for the ostree dracut module's binary, preferring lsinitrd (part
+# of the same dracut package the Containerfile already invokes) and falling
+# back to a raw content scan of the decompressed archive if lsinitrd is ever
+# unavailable.
+check "regenerated initramfs actually contains ostree-prepare-root" "FOUND" \
+  sh -c '
+    set -e
+    KV="$(rpm -q --queryformat="%{evr}.%{arch}" kernel-core)"
+    IMG="/usr/lib/modules/$KV/initramfs.img"
+    if command -v lsinitrd >/dev/null 2>&1; then
+      lsinitrd "$IMG" 2>/dev/null | grep -q ostree-prepare-root && echo FOUND
+    else
+      zstd -dc "$IMG" 2>/dev/null | grep -a -q ostree-prepare-root && echo FOUND
+    fi
+  '
 check "os-release DEFAULT_HOSTNAME is cedar" 'DEFAULT_HOSTNAME="cedar"' \
   cat /usr/lib/os-release
 check "os-release LOGO points at Cedar's logo" 'LOGO=cedar-logo' \
   cat /usr/lib/os-release
 check "os-release CPE_NAME deliberately still Fedora" 'cpe:/o:fedoraproject' \
   cat /usr/lib/os-release
+
+echo
+echo "Signature policy"
+check_file_exists "cosign public key installed" /etc/pki/containers/cedar.pub
+check_file_exists "containers policy installed"  /etc/containers/policy.json
+check_file_exists "ghcr registries.d installed"  /etc/containers/registries.d/ghcr.yaml
+check "policy keyPath points at Cedar's key" '/etc/pki/containers/cedar.pub' \
+  cat /etc/containers/policy.json
 
 summary
