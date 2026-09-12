@@ -113,6 +113,8 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
+          # Policy's keyPath is absolute and refers to in-image location; install it on the runner
+          sudo install -Dm644 cosign.pub /etc/pki/containers/cedar.pub
           DEST="$(mktemp -d)"
           skopeo copy \
             --policy branding/policy.json \
