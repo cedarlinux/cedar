@@ -17,7 +17,7 @@
 Copied from the spec. Every task's requirements implicitly include these.
 
 - **Never rebuild or replace `shim`, `grub2`, or the kernel.** Secure Boot is inherited from Fedora and survives only while Cedar's signed EFI payload is byte-identical to the base's. Task 4 enforces this.
-- **The signed payload lives in `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`, not `/boot`.** On ostree, RPM content for shim and grub2 lands in `/usr` and never touches the ESP. It reaches the ESP only via `bootupctl` or an installer.
+- **The signed payload lives under `/usr/lib/efi/grub2/<rpm-evr>/EFI/fedora/` and `/usr/lib/efi/shim/<rpm-evr>/EFI/{BOOT,fedora}/`, not `/boot`.** On ostree, RPM content for shim and grub2 lands in `/usr` and never touches the ESP; it reaches the ESP only via `bootupctl` or an installer. *(An earlier draft of this constraint named `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`. Task 1 disproved both against the real image: the first holds only `EFI.json`/`BIOS.json` metadata, and the second is an empty directory. `/usr/lib/bootupd/updates/*.json` is still worth hashing as bootupd's version manifest, but it is not the payload.)*
 - **`rpm -V` is useless in these images.** OSTree normalises every file mtime to zero and rpm compares mtime unconditionally, so `rpm -V` reports every file as modified on a pristine image. Verify content with digests. `rpm -q` works fine.
 - **GRUB branding is limited to `GRUB_BACKGROUND` and `GRUB_THEME`.** Since GRUB 2.06 `insmod` is prohibited under Secure Boot; a theme needing a module absent from Fedora's signed `grubx64.efi` halts the machine at an error prompt.
 - **Target architecture is `x86_64`.** The base is a multi-arch manifest list, so every podman command needs `--platform=linux/amd64` or an arm64 host silently builds the wrong image with different package names.
@@ -52,7 +52,7 @@ git push -u origin main
 gh api "repos/$NAMESPACE/cedar/actions/permissions"
 ```
 
-**`NAMESPACE` is bound once, here. Every `<namespace>` in this plan means that value — including inside the README committed in Task 2 and the rebase commands in Task 7.** Write it at the top of your working notes.
+**Settled: `NAMESPACE=cedarlinux`.** The repository is `github.com/cedarlinux/cedar` and the image is `ghcr.io/cedarlinux/cedar`; both are written out literally throughout this plan, so there is nothing left to substitute.
 
 - [ ] **Provision a Linux VM host for Task 7** with UEFI and Secure Boot support. On Apple Silicon an x86_64 VM is emulated and painfully slow, so prefer a cheap x86_64 cloud instance with nested virtualisation, or a spare PC.
 
@@ -314,7 +314,7 @@ Create `Containerfile`, substituting the digest from Task 1:
 #
 # Pinned by digest: the :44 tag is mutable, and a moving base would make the
 # boot-chain guard compare against something the build never used.
-FROM quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>
+FROM quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:2535cf2c9b20c4827537baa08605e6ae0254118e1b1a8ca19a1ada250e9cd293
 
 # bootc container lint MUST be the last instruction — it validates the final
 # filesystem. Anything added below it goes unlinted.
@@ -382,7 +382,7 @@ A Fedora COSMIC Atomic derivative. Mouse-first, deeply themeable.
 Install Fedora COSMIC Atomic, then rebase onto Cedar:
 
 ```bash
-sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/cedarlinux/cedar:44
 sudo systemctl reboot
 ```
 
@@ -576,7 +576,7 @@ fi
 
 ```bash
 chmod +x test/boot-chain.sh
-export CEDAR_BASE="quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>"
+export CEDAR_BASE="quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:2535cf2c9b20c4827537baa08605e6ae0254118e1b1a8ca19a1ada250e9cd293"
 ./test/boot-chain.sh localhost/cedar:dev
 ```
 
@@ -823,7 +823,7 @@ legitimately regenerates and which is not a signed EFI binary."
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: a cosign-signed `ghcr.io/<namespace>/cedar:44` and `:latest`.
+- Produces: a cosign-signed `ghcr.io/cedarlinux/cedar:44` and `:latest`.
 
 **Why signing is in milestone 1 rather than later:** the rebase string is the product — it goes in the README now and the ISO in milestone 2 — and the signature policy must already be present *in the image the user is running*. Retrofitting forces every existing install to re-rebase to a new URL.
 
@@ -852,7 +852,7 @@ Create `branding/policy.json`:
   "default": [{ "type": "insecureAcceptAnything" }],
   "transports": {
     "docker": {
-      "ghcr.io/<namespace>/cedar": [
+      "ghcr.io/cedarlinux/cedar": [
         {
           "type": "sigstoreSigned",
           "keyPath": "/usr/etc/pki/containers/cedar.pub",
@@ -932,9 +932,12 @@ jobs:
       - name: Build image
         run: podman build --platform=linux/amd64 --pull=always -t "${IMAGE_NAME}:ci" .
 
+      # CEDAR_BASE is deliberately NOT set here. Task 4's fix round made
+      # boot-chain.sh derive it from the Containerfile's own FROM line, so the
+      # guard is structurally incapable of comparing against an image the build
+      # did not use. Setting it here would reintroduce a second place where the
+      # digest can drift out of sync with the build.
       - name: Run image tests
-        env:
-          CEDAR_BASE: quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>
         run: |
           ./test/test-image.sh "${IMAGE_NAME}:ci"
           ./test/boot-chain.sh "${IMAGE_NAME}:ci"
@@ -1074,7 +1077,7 @@ Expected: Fedora, and Secure Boot reported enabled. If Secure Boot is off here, 
 - [ ] **Step 3: Rebase onto Cedar**
 
 ```bash
-sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/cedarlinux/cedar:44
 ```
 
 Expected: pull succeeds, signature verifies, a new deployment is staged.
@@ -1082,7 +1085,7 @@ Expected: pull succeeds, signature verifies, a new deployment is staged.
 If it fails on **signature verification**, the stock Fedora system has no Cedar policy yet — that only ships *inside* Cedar. Rebase unsigned this once, and verify signed rebases on the second hop:
 
 ```bash
-sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/cedarlinux/cedar:44
 ```
 
 If it fails with **401**, the package is still private — return to Task 6 Step 8.

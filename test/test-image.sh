@@ -27,4 +27,22 @@ check "OSTREE_VERSION survived branding"  'OSTREE_VERSION'    cat /usr/lib/os-re
 check "EFIDIR pinned to fedora (Cedar edits this; boot-chain cannot diff it)" \
   'EFIDIR="fedora"' grep '^EFIDIR=' /usr/sbin/grub2-switch-to-blscfg
 
+echo
+echo "Branding"
+check_file_exists "Cedar wallpaper installed" \
+  /usr/share/backgrounds/cedar/cedar-default.jpg
+check_file_exists "Cedar logo installed" \
+  /usr/share/pixmaps/cedar-logo.svg
+check_file_exists "Cedar plymouth theme exists" \
+  /usr/share/plymouth/themes/cedar/cedar.plymouth
+check "plymouth default theme is cedar" "cedar" plymouth-set-default-theme
+check "initramfs regenerated in /usr/lib/modules" "initramfs.img" \
+  sh -c 'ls /usr/lib/modules/*/initramfs.img'
+check "os-release DEFAULT_HOSTNAME is cedar" 'DEFAULT_HOSTNAME="cedar"' \
+  cat /usr/lib/os-release
+check "os-release LOGO points at Cedar's logo" 'LOGO=cedar-logo' \
+  cat /usr/lib/os-release
+check "os-release CPE_NAME deliberately still Fedora" 'cpe:/o:fedoraproject' \
+  cat /usr/lib/os-release
+
 summary
