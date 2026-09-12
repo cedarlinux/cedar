@@ -191,10 +191,18 @@ Findings from the five-agent review of the previous design that still apply:
 
 ## Open items
 
-- Which COSMIC version Fedora 44 currently ships. It released with 1.0.8 while
-  upstream is at 1.3–1.5; Fedora updates desktops within a release, unlike
-  Debian, so this is probably fine, but it is unverified and it is the same
-  staleness trap that killed the Debian design.
+- **Which COSMIC version Fedora 44 currently ships.** It released in April 2026
+  with 1.0.8 while upstream is now at 1.3–1.5. Whether Fedora has updated COSMIC
+  within the release is not documented publicly and must be checked against the
+  repository directly (`dnf info cosmic-desktop`) at milestone 1. This is the
+  same staleness trap that killed the Debian design, so it is worth checking
+  early — but it is far less dangerous here for two reasons: Fedora releases
+  every six months rather than every two years, so the worst case is months of
+  lag rather than years; and the `ryanabx/cosmic-epoch` COPR packages COSMIC for
+  Fedora, giving a fallback that Debian simply did not have for Plasma. If the
+  COPR turns out to be necessary, note that the first design was abandoned partly
+  for depending on third-party COPRs — acceptable for one user, not for a
+  distribution.
 - Whether CuteCosmic is maintained and sufficient for Qt theming, or whether
   Kvantum is needed.
 - Whether COSMIC's exported `.ron` is a stable enough format to generate
