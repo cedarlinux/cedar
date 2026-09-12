@@ -2,14 +2,40 @@
 # Cedar boots under Secure Boot only if its signed EFI payload and kernel are
 # byte-identical to the base's. Compares content digests, not package metadata.
 #
-# Exit 0 = payload matches. Exit 1 = Cedar broke it. Exit 2 = the guard is
-# broken (which must never be reported as success).
+# Exit 0 = payload matches. Exit 1 = Cedar broke it. Exit 2 = the guard itself
+# is broken — bad/missing image argument, no usable base image, or an empty
+# or partial manifest. A misconfiguration is never a Secure Boot regression,
+# so it must never be reported as exit 1.
 set -euo pipefail
 
-IMAGE="${1:?usage: boot-chain.sh <image>}"
-BASE="${CEDAR_BASE:?set CEDAR_BASE to the digest-pinned base from Task 1}"
+usage() { echo "usage: boot-chain.sh <image>" >&2; exit 2; }
+if [ $# -lt 1 ] || [ -z "$1" ]; then usage; fi
+IMAGE="$1"
+
 PLATFORM="${PLATFORM:-linux/amd64}"
-MIN_FILES=12   # observed count is ~26; this floor catches a partial result
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Default to the base image this repo actually builds from, read straight out
+# of the Containerfile, so `just test`/`just check` work with no environment
+# set up and can never silently compare Cedar against a base the build didn't
+# use. An explicit CEDAR_BASE still overrides this.
+default_base() {
+  awk '/^FROM /{print $2; exit}' "$SCRIPT_DIR/../Containerfile" 2>/dev/null || true
+}
+BASE="${CEDAR_BASE:-$(default_base)}"
+if [ -z "$BASE" ]; then
+  echo "FAIL: CEDAR_BASE is unset and no FROM line could be read from" \
+       "$SCRIPT_DIR/../Containerfile" >&2
+  exit 2
+fi
+
+# Observed against localhost/cedar:dev and its base in Task 4 Step 2: 17
+# files. This is a coarse backstop; the per-subtree checks inside manifest()
+# below are what actually catch a subtree (e.g. grub2) going missing without
+# shrinking the total enough to trip a single floor.
+MIN_FILES=17
+
+count_lines() { wc -l < "$1" | tr -d '[:space:]'; }
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
@@ -29,7 +55,10 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 manifest() {
   podman run --rm --platform="$PLATFORM" --entrypoint "" "$1" sh -c '
     set -e
-    find /usr/lib/efi -type f -exec sha256sum {} +
+    for d in /usr/lib/efi/grub2 /usr/lib/efi/shim; do
+      [ -d "$d" ] && [ -n "$(find "$d" -type f -o -type l)" ] || { echo "missing/empty: $d" >&2; exit 1; }
+    done
+    find /usr/lib/efi \( -type f -o -type l \) -exec sha256sum {} +
     sha256sum /usr/lib/bootupd/updates/*.json
     for k in /usr/lib/modules/*/; do
       sha256sum "$k"vmlinuz "$k"initramfs.img
@@ -44,7 +73,7 @@ for side in base cedar; do
     sed 's/^/       /' "$WORK/$side.err" >&2
     exit 2
   fi
-  n=$(wc -l < "$WORK/$side")
+  n=$(count_lines "$WORK/$side")
   if (( n < MIN_FILES )); then
     echo "FAIL: $img yielded only $n boot files (expected >= $MIN_FILES)" >&2
     echo "      the guard is broken, not the image" >&2
@@ -54,7 +83,7 @@ done
 
 echo "Boot chain guard"
 if diff -u "$WORK/base" "$WORK/cedar"; then
-  echo "  ok   signed boot payload byte-identical to base ($(wc -l < "$WORK/cedar") files)"
+  echo "  ok   signed boot payload byte-identical to base ($(count_lines "$WORK/cedar") files)"
 else
   echo "  FAIL Cedar's signed boot payload differs from the base"
   exit 1
