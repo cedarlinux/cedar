@@ -28,6 +28,51 @@ RUN set -eux; \
 # PRETTY_NAME in /usr/lib/os-release, which ostree reads in preference to
 # /etc/os-release. No separate GRUB title branding is needed or possible.
 
+# Wallpapers and logo
+COPY branding/wallpapers/ /usr/share/backgrounds/cedar/
+COPY branding/logo/cedar-logo.svg /usr/share/pixmaps/cedar-logo.svg
+COPY branding/plymouth-watermark.png /tmp/cedar-watermark.png
+
+# Two os-release keys deferred from Task 3 until the assets they name exist.
+# LOGO could not be set earlier without pointing at a file that was not yet
+# installed; it is set here, immediately after the logo is COPYed above.
+#
+# CPE_NAME is deliberately LEFT as Fedora's. It feeds CPE-based CVE and asset
+# scanners, and Cedar's packages genuinely ARE Fedora 44 packages, so matching
+# Fedora 44 advisories is the accurate result. A cedarlinux CPE would match no
+# known vulnerability database and make Cedar silently appear vulnerability-free.
+RUN set -eux; \
+    sed -i 's/^DEFAULT_HOSTNAME=.*/DEFAULT_HOSTNAME="cedar"/' /usr/lib/os-release; \
+    sed -i 's/^LOGO=.*/LOGO=cedar-logo/'                      /usr/lib/os-release; \
+    grep -q '^DEFAULT_HOSTNAME="cedar"' /usr/lib/os-release; \
+    grep -q '^LOGO=cedar-logo'          /usr/lib/os-release
+
+# Plymouth. Derived from the stock spinner theme so Cedar inherits a working
+# splash rather than authoring one, then renamed and re-watermarked.
+RUN set -eux; \
+    cp -r /usr/share/plymouth/themes/spinner /usr/share/plymouth/themes/cedar; \
+    mv /usr/share/plymouth/themes/cedar/spinner.plymouth \
+       /usr/share/plymouth/themes/cedar/cedar.plymouth; \
+    sed -i 's/^Name=.*/Name=Cedar/;s/^Description=.*/Description=Cedar boot splash/' \
+       /usr/share/plymouth/themes/cedar/cedar.plymouth; \
+    sed -i 's|ImageDir=.*|ImageDir=/usr/share/plymouth/themes/cedar|' \
+       /usr/share/plymouth/themes/cedar/cedar.plymouth; \
+    cp /tmp/cedar-watermark.png /usr/share/plymouth/themes/cedar/watermark.png; \
+    rm -f /tmp/cedar-watermark.png; \
+    plymouth-set-default-theme cedar
+
+# Regenerate the initramfs so the Plymouth theme is actually present at boot.
+# MANDATORY, not optional: the base ships an initramfs containing Fedora's
+# theme. Note the target path — on Atomic /boot is empty, so plain
+# `dracut --force --regenerate-all` writes nowhere useful. `--add ostree` is
+# required or the result cannot boot an ostree system.
+RUN set -eux; \
+    KV="$(rpm -q --queryformat='%{evr}.%{arch}' kernel-core)"; \
+    export DRACUT_NO_XATTR=1; \
+    dracut --no-hostonly --kver "$KV" --reproducible --zstd -v --add ostree \
+           -f "/usr/lib/modules/${KV}/initramfs.img"; \
+    chmod 0600 "/usr/lib/modules/${KV}/initramfs.img"
+
 # bootc container lint MUST be the last instruction — it validates the final
 # filesystem. Anything added below it goes unlinted.
 RUN bootc container lint
