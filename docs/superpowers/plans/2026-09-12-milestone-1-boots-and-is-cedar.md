@@ -17,7 +17,7 @@
 Copied from the spec. Every task's requirements implicitly include these.
 
 - **Never rebuild or replace `shim`, `grub2`, or the kernel.** Secure Boot is inherited from Fedora and survives only while Cedar's signed EFI payload is byte-identical to the base's. Task 4 enforces this.
-- **The signed payload lives in `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`, not `/boot`.** On ostree, RPM content for shim and grub2 lands in `/usr` and never touches the ESP. It reaches the ESP only via `bootupctl` or an installer.
+- **The signed payload lives under `/usr/lib/efi/grub2/<rpm-evr>/EFI/fedora/` and `/usr/lib/efi/shim/<rpm-evr>/EFI/{BOOT,fedora}/`, not `/boot`.** On ostree, RPM content for shim and grub2 lands in `/usr` and never touches the ESP; it reaches the ESP only via `bootupctl` or an installer. *(An earlier draft of this constraint named `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`. Task 1 disproved both against the real image: the first holds only `EFI.json`/`BIOS.json` metadata, and the second is an empty directory. `/usr/lib/bootupd/updates/*.json` is still worth hashing as bootupd's version manifest, but it is not the payload.)*
 - **`rpm -V` is useless in these images.** OSTree normalises every file mtime to zero and rpm compares mtime unconditionally, so `rpm -V` reports every file as modified on a pristine image. Verify content with digests. `rpm -q` works fine.
 - **GRUB branding is limited to `GRUB_BACKGROUND` and `GRUB_THEME`.** Since GRUB 2.06 `insmod` is prohibited under Secure Boot; a theme needing a module absent from Fedora's signed `grubx64.efi` halts the machine at an error prompt.
 - **Target architecture is `x86_64`.** The base is a multi-arch manifest list, so every podman command needs `--platform=linux/amd64` or an arm64 host silently builds the wrong image with different package names.
@@ -52,7 +52,7 @@ git push -u origin main
 gh api "repos/$NAMESPACE/cedar/actions/permissions"
 ```
 
-**`NAMESPACE` is bound once, here. Every `<namespace>` in this plan means that value — including inside the README committed in Task 2 and the rebase commands in Task 7.** Write it at the top of your working notes.
+**Settled: `NAMESPACE=cedarlinux`.** The repository is `github.com/cedarlinux/cedar` and the image is `ghcr.io/cedarlinux/cedar`; both are written out literally throughout this plan, so there is nothing left to substitute.
 
 - [ ] **Provision a Linux VM host for Task 7** with UEFI and Secure Boot support. On Apple Silicon an x86_64 VM is emulated and painfully slow, so prefer a cheap x86_64 cloud instance with nested virtualisation, or a spare PC.
 
@@ -142,7 +142,19 @@ podman run --rm --platform=linux/amd64 \
   find /usr/lib/bootupd /usr/lib/ostree-boot -maxdepth 4
 ```
 
-Expected: trees under `/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`. Note the actual paths — Task 4's script hardcodes them, and they must match.
+> **Answered by Task 1, and the answer was not what this step expected.** This
+> step originally predicted trees under `/usr/lib/bootupd/updates/EFI/` and
+> `/usr/lib/ostree-boot/efi/EFI/`. Both are wrong: the first holds only
+> `EFI.json`/`BIOS.json` metadata, and the second is an **empty directory**. The
+> signed payload is at `/usr/lib/efi/grub2/<evr>/EFI/fedora/` and
+> `/usr/lib/efi/shim/<evr>/EFI/{BOOT,fedora}/`. Task 4 has been corrected
+> accordingly. Kept here as a record of why this verification step exists: had
+> Task 4 run against the predicted paths, the guard would have hashed an empty
+> directory and two metadata files, found them identical, and reported the Secure
+> Boot payload verified — failing open on the one check this milestone exists to
+> make.
+
+Note the actual paths — Task 4's script walks them, and they must match.
 
 - [ ] **Step 6: Confirm `/etc/os-release` is a symlink and `bootc` is present**
 
@@ -302,7 +314,7 @@ Create `Containerfile`, substituting the digest from Task 1:
 #
 # Pinned by digest: the :44 tag is mutable, and a moving base would make the
 # boot-chain guard compare against something the build never used.
-FROM quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>
+FROM quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:2535cf2c9b20c4827537baa08605e6ae0254118e1b1a8ca19a1ada250e9cd293
 
 # bootc container lint MUST be the last instruction — it validates the final
 # filesystem. Anything added below it goes unlinted.
@@ -370,7 +382,7 @@ A Fedora COSMIC Atomic derivative. Mouse-first, deeply themeable.
 Install Fedora COSMIC Atomic, then rebase onto Cedar:
 
 ```bash
-sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/cedarlinux/cedar:44
 sudo systemctl reboot
 ```
 
@@ -508,15 +520,28 @@ set -euo pipefail
 IMAGE="${1:?usage: boot-chain.sh <image>}"
 BASE="${CEDAR_BASE:?set CEDAR_BASE to the digest-pinned base from Task 1}"
 PLATFORM="${PLATFORM:-linux/amd64}"
-MIN_FILES=6   # a sane payload has far more; this floor catches empty output
+MIN_FILES=12   # observed count is ~26; this floor catches a partial result
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
+# Paths verified against the real image in Task 1. Do NOT substitute the
+# "obvious" ones: /usr/lib/ostree-boot/efi is EMPTY in this image, and
+# /usr/lib/bootupd/updates/{EFI,BIOS}.json are metadata, not binaries. The
+# signed payload lives under /usr/lib/efi/{grub2,shim}/<rpm-evr>/EFI/, where
+# the <rpm-evr> segment drifts with package updates — which is why this walks
+# the whole /usr/lib/efi tree rather than globbing a version into a path.
+#
+# /usr/lib/bootupd/updates/*.json IS hashed: it is bootupd's manifest and
+# records the payload versions (grub2-1:2.12-64.fc44,shim-16.1-5), so a
+# version change trips the guard even if a binary somehow hashed the same.
+#
+# /usr/lib/bootupd/grub2-static/ is deliberately NOT hashed: those are GRUB
+# config fragments, not signed binaries, and Cedar may legitimately edit them.
 manifest() {
   podman run --rm --platform="$PLATFORM" --entrypoint "" "$1" sh -c '
     set -e
-    find /usr/lib/bootupd/updates /usr/lib/ostree-boot/efi \
-         -type f -exec sha256sum {} +
+    find /usr/lib/efi -type f -exec sha256sum {} +
+    sha256sum /usr/lib/bootupd/updates/*.json
     for k in /usr/lib/modules/*/; do
       sha256sum "$k"vmlinuz "$k"initramfs.img
     done
@@ -551,7 +576,7 @@ fi
 
 ```bash
 chmod +x test/boot-chain.sh
-export CEDAR_BASE="quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>"
+export CEDAR_BASE="quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:2535cf2c9b20c4827537baa08605e6ae0254118e1b1a8ca19a1ada250e9cd293"
 ./test/boot-chain.sh localhost/cedar:dev
 ```
 
@@ -642,7 +667,18 @@ check_file_exists "Cedar plymouth theme exists" \
 check "plymouth default theme is cedar" "cedar" plymouth-set-default-theme
 check "initramfs regenerated in /usr/lib/modules" "initramfs.img" \
   sh -c 'ls /usr/lib/modules/*/initramfs.img'
+check "os-release DEFAULT_HOSTNAME is cedar" 'DEFAULT_HOSTNAME="cedar"' \
+  cat /usr/lib/os-release
+check "os-release LOGO points at Cedar's logo" 'LOGO=cedar-logo' \
+  cat /usr/lib/os-release
+check "os-release CPE_NAME deliberately still Fedora" 'cpe:/o:fedoraproject' \
+  cat /usr/lib/os-release
 ```
+
+The last assertion looks wrong and is not. `CPE_NAME` is pinned to Fedora on
+purpose — see the Containerfile comment below — and asserting it explicitly
+stops a future contributor from "fixing" it into a CPE that matches no
+vulnerability database.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -683,6 +719,20 @@ Modify `Containerfile`, inserting after the identity layer and **before** `bootc
 COPY branding/wallpapers/ /usr/share/backgrounds/cedar/
 COPY branding/logo/cedar-logo.svg /usr/share/pixmaps/cedar-logo.svg
 COPY branding/plymouth-watermark.png /tmp/cedar-watermark.png
+
+# Two os-release keys deferred from Task 3 until the assets they name exist.
+# LOGO could not be set earlier without pointing at a file that was not yet
+# installed; it is set here, immediately after the logo is COPYed above.
+#
+# CPE_NAME is deliberately LEFT as Fedora's. It feeds CPE-based CVE and asset
+# scanners, and Cedar's packages genuinely ARE Fedora 44 packages, so matching
+# Fedora 44 advisories is the accurate result. A cedarlinux CPE would match no
+# known vulnerability database and make Cedar silently appear vulnerability-free.
+RUN set -eux; \
+    sed -i 's/^DEFAULT_HOSTNAME=.*/DEFAULT_HOSTNAME="cedar"/' /usr/lib/os-release; \
+    sed -i 's/^LOGO=.*/LOGO=cedar-logo/'                      /usr/lib/os-release; \
+    grep -q '^DEFAULT_HOSTNAME="cedar"' /usr/lib/os-release; \
+    grep -q '^LOGO=cedar-logo'          /usr/lib/os-release
 
 # Plymouth. Derived from the stock spinner theme so Cedar inherits a working
 # splash rather than authoring one, then renamed and re-watermarked.
@@ -741,7 +791,14 @@ to:
       sha256sum "$k"vmlinuz
 ```
 
-Then re-run: expected exit 0.
+**And lower `MIN_FILES` from 17 to 16 in the same edit** — dropping
+`initramfs.img` drops the count by exactly one (13 files under `/usr/lib/efi`,
+2 bootupd manifests, `vmlinuz`). Leave the floor at 17 and the guard exits **2**
+reporting itself broken, which looks like Task 5 having damaged it. Update the
+comment's stated count too; that comment is the floor's only justification, and
+a stale number here is the same defect Task 4's fix round corrected.
+
+Then re-run: expected exit 0 with 16 files.
 
 - [ ] **Step 7: Commit**
 
@@ -766,7 +823,7 @@ legitimately regenerates and which is not a signed EFI binary."
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: a cosign-signed `ghcr.io/<namespace>/cedar:44` and `:latest`.
+- Produces: a cosign-signed `ghcr.io/cedarlinux/cedar:44` and `:latest`.
 
 **Why signing is in milestone 1 rather than later:** the rebase string is the product — it goes in the README now and the ISO in milestone 2 — and the signature policy must already be present *in the image the user is running*. Retrofitting forces every existing install to re-rebase to a new URL.
 
@@ -795,7 +852,7 @@ Create `branding/policy.json`:
   "default": [{ "type": "insecureAcceptAnything" }],
   "transports": {
     "docker": {
-      "ghcr.io/<namespace>/cedar": [
+      "ghcr.io/cedarlinux/cedar": [
         {
           "type": "sigstoreSigned",
           "keyPath": "/usr/etc/pki/containers/cedar.pub",
@@ -875,9 +932,12 @@ jobs:
       - name: Build image
         run: podman build --platform=linux/amd64 --pull=always -t "${IMAGE_NAME}:ci" .
 
+      # CEDAR_BASE is deliberately NOT set here. Task 4's fix round made
+      # boot-chain.sh derive it from the Containerfile's own FROM line, so the
+      # guard is structurally incapable of comparing against an image the build
+      # did not use. Setting it here would reintroduce a second place where the
+      # digest can drift out of sync with the build.
       - name: Run image tests
-        env:
-          CEDAR_BASE: quay.io/fedora-ostree-desktops/cosmic-atomic@sha256:<DIGEST_FROM_TASK_1>
         run: |
           ./test/test-image.sh "${IMAGE_NAME}:ci"
           ./test/boot-chain.sh "${IMAGE_NAME}:ci"
@@ -972,13 +1032,21 @@ push builds down with it."
 git push
 ```
 
-- [ ] **Step 7: Watch the run**
+- [ ] **Step 7: Trigger the workflow and watch it**
+
+The workflow triggers on `push` to `main`, and this work is on `milestone-1`, so
+pushing will not fire it. Merging an unverified CI workflow into `main` purely to
+test it is backwards, so use the `workflow_dispatch` trigger the workflow already
+declares — it exercises the identical job graph:
 
 ```bash
-gh run watch
+gh workflow run build.yml --ref milestone-1
+sleep 5 && gh run watch
 ```
 
-Expected: build, both test suites, login, push, sign, and the `verify-public` job.
+Expected: build, both test suites, login, push, sign, and the `verify-public`
+job. The `on: push` trigger needs no change and starts working naturally once
+`milestone-1` merges to `main`.
 
 - [ ] **Step 8: Make the package public**
 
@@ -1009,7 +1077,7 @@ Expected: Fedora, and Secure Boot reported enabled. If Secure Boot is off here, 
 - [ ] **Step 3: Rebase onto Cedar**
 
 ```bash
-sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/cedarlinux/cedar:44
 ```
 
 Expected: pull succeeds, signature verifies, a new deployment is staged.
@@ -1017,7 +1085,7 @@ Expected: pull succeeds, signature verifies, a new deployment is staged.
 If it fails on **signature verification**, the stock Fedora system has no Cedar policy yet — that only ships *inside* Cedar. Rebase unsigned this once, and verify signed rebases on the second hop:
 
 ```bash
-sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/<namespace>/cedar:44
+sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/cedarlinux/cedar:44
 ```
 
 If it fails with **401**, the package is still private — return to Task 6 Step 8.

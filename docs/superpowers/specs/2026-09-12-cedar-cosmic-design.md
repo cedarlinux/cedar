@@ -154,7 +154,8 @@ shim and grub2 RPM content lands in `/usr` — inside the ostree commit — and
 **never touches the EFI system partition**. `rpm-ostree rebase` rewrites only
 `grub.cfg` and the boot entries; every other file on the ESP is the one the
 installer wrote. Cedar's signed payload therefore lives at
-`/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`, and it
+`/usr/lib/efi/grub2/<rpm-evr>/EFI/fedora/` and
+`/usr/lib/efi/shim/<rpm-evr>/EFI/{BOOT,fedora}/`, and it
 reaches the ESP by exactly two routes: **`bootupctl`** (bootloader updates are
 enabled by default on Fedora Atomic Desktops) and **an installer** — which is
 milestone 2's ISO.
@@ -165,8 +166,11 @@ Three consequences:
   from the ESP the installer wrote. Rebasing validates the **kernel** signature
   path only.
 - The payload must therefore be verified by **comparing bytes** — digests of
-  those two trees plus `vmlinuz` and `initramfs.img`, against the base image.
-  Comparing RPM package versions is not sufficient, and `rpm -V` is useless
+  those two trees plus `vmlinuz`, against the base image. `initramfs.img` is
+  deliberately NOT hashed: Cedar regenerates it (for the Plymouth theme) and
+  it is not a signed EFI binary, so a guard that hashed it would flag Cedar's
+  own legitimate branding as a Secure Boot break. Comparing RPM package
+  versions is not sufficient, and `rpm -V` is useless
   here: ostree normalises every file mtime to zero, so `rpm -V` reports every
   file as modified on a pristine image.
 - **GRUB branding has a hard limit.** Since GRUB 2.06, `insmod` is prohibited
@@ -179,6 +183,36 @@ Three consequences:
 derives its EFI directory from os-release (`EFIDIR=$(grep ^ID= …)`) and looks in
 `/boot/efi/EFI/${EFIDIR}/`. Setting `ID=cedar` points it at a directory that does
 not exist, so Cedar must pin `EFIDIR="fedora"`. Bazzite carries the same fix.
+
+**`CPE_NAME` stays as Fedora's, deliberately.** It feeds CPE-based CVE and asset
+scanners, and Cedar's packages genuinely *are* Fedora 44 packages, so matching
+Fedora 44 advisories is the accurate answer. A `cpe:/o:cedarlinux:cedar:44` would
+match no known vulnerability database and make Cedar silently appear
+vulnerability-free. Milestone 1 carries a test asserting this, because the
+"inconsistency" invites well-meaning correction.
+
+### The payload guard is necessary but not sufficient
+
+Milestone 1's `test/boot-chain.sh` compares the signed payload in the image
+against the base, byte for byte. It validates **the bytes sitting in the image**
+and says nothing about **how those bytes reach an ESP**. Three blind spots, each
+confirmed to report a passing check while the system is broken:
+
+- `/usr/sbin/grub2-switch-to-blscfg`, which Cedar edits, and which selects the
+  ESP vendor directory. Covered instead by asserting its content.
+- `/usr/lib/bootupd/grub2-static/*`, deliberately unhashed because those files
+  are configuration rather than signed binaries — but they *become* the ESP's
+  `grub.cfg`, so Cedar can change what signed GRUB executes with the guard green
+  by design.
+- Unsigned kernel modules under `/usr/lib/modules/<kver>/extra/`.
+
+For a rebase this is an acceptable trade: the machine boots from the ESP its
+installer wrote, so a corrupt payload in the image cannot brick it. **Milestone 2
+removes that safety margin**, because the ISO populates an ESP from scratch.
+Milestone 2 therefore requires a second check that mounts the generated ESP and
+asserts `EFI/BOOT/BOOTX64.EFI` and `EFI/fedora/grubx64.efi` hash-match
+`/usr/lib/efi/`. Without it, a broken payload ships as a bootable-looking ISO
+with CI green.
 
 NVIDIA's DKMS modules remain the exception — unsigned, and still requiring MOK
 enrollment at a firmware prompt. A one-time annoyance for a single user, and a
