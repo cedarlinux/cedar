@@ -1,5 +1,10 @@
 # Cedar — Design
 
+> **SUPERSEDED (2026-09-12).** Debian 14 + KDE Plasma, aimed at Windows and
+> macOS switchers. Withdrawn after a five-agent review: the audience, not the
+> technology, was the wrong choice. See `2026-09-12-cedar-cosmic-design.md`.
+> Kept for the review findings and the reasoning chain it records.
+
 Supersedes `2026-09-09-cedar-design.md`, which described Cedar as an Omarchy
 fork on Fedora bootc. That design is withdrawn in full: the base, the desktop,
 the delivery mechanism and the audience have all changed.
