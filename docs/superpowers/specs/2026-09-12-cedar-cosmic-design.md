@@ -49,10 +49,20 @@ nothing.
    *separate* floating dock holding running and pinned apps. That is the
    apps-vs-windows split from the previous design, out of the box, with no
    forked widget and no upstream fight.
-4. **COSMIC's native config already is the format** → themes are `.ron` files
-   driven by the `cosmic-theme` crate, and an exported theme carries the
-   wallpaper, panel layout, dock position and applet order. Cedar does not
-   invent a format; it generates one.
+4. **COSMIC's theme format is native and Cedar generates it rather than
+   inventing one** → themes are `.ron` files driven by the `cosmic-theme`
+   crate. Cedar targets **schema v2 and COSMIC 1.8**; v1 files load on a v2
+   reader but not the reverse, and that shim is explicitly temporary and only
+   one version deep.
+
+   An earlier draft of this spec claimed a COSMIC theme export also carries the
+   wallpaper, panel layout, dock position and applet order. **That is false and
+   has never been true in any version** — the export serialises a
+   `ThemeBuilder` and nothing else. Cedar therefore writes four config
+   namespaces, not one: `com.system76.CosmicBackground` (wallpaper),
+   `com.system76.CosmicPanel` with its `Panel` and `Dock` profiles (layout),
+   and `com.system76.CosmicAppList/favorites` (dock pins). All are still `v1`
+   at COSMIC 1.8, so they are stable — but they are Cedar's to write.
 5. **Identity comes from the desktop, not the base** → Omarchy is Arch plus
    configuration and feels entirely like Omarchy. Cedar controls every surface
    the author looks at.
@@ -136,19 +146,43 @@ could not get.
 ### Secure Boot
 
 Cedar's ISO boots on stock hardware with Secure Boot enabled, at no cost and
-with no process. Fedora's own documentation states that a remix shipping
-Fedora's shim, grub2 and kernel **unchanged** will boot on Secure Boot machines.
-Cedar never rebuilds any of the three.
+with no process, because it ships Fedora's signed shim, grub2 and kernel
+unchanged. This is a **hard constraint, not a convenience.**
 
-This is therefore a **hard constraint, not merely a convenience**: Cedar must
-never rebuild or replace shim, grub2 or the kernel. Branding may change GRUB's
-appearance through theme files and configuration, never by rebuilding the signed
-EFI binary. Secure Boot was a blocker in the Debian design; here it is
-inherited, and the only way to lose it is to break this rule.
+**The mechanism matters, and is easy to get wrong.** On an ostree system the
+shim and grub2 RPM content lands in `/usr` — inside the ostree commit — and
+**never touches the EFI system partition**. `rpm-ostree rebase` rewrites only
+`grub.cfg` and the boot entries; every other file on the ESP is the one the
+installer wrote. Cedar's signed payload therefore lives at
+`/usr/lib/bootupd/updates/EFI/` and `/usr/lib/ostree-boot/efi/EFI/`, and it
+reaches the ESP by exactly two routes: **`bootupctl`** (bootloader updates are
+enabled by default on Fedora Atomic Desktops) and **an installer** — which is
+milestone 2's ISO.
 
-NVIDIA's DKMS modules remain the exception — they are unsigned and still require
-MOK enrollment at a firmware prompt. That is a one-time annoyance for a single
-user and a real problem if Cedar ever has general users.
+Three consequences:
+
+- A rebase test cannot detect a broken shim or grub2, because the machine boots
+  from the ESP the installer wrote. Rebasing validates the **kernel** signature
+  path only.
+- The payload must therefore be verified by **comparing bytes** — digests of
+  those two trees plus `vmlinuz` and `initramfs.img`, against the base image.
+  Comparing RPM package versions is not sufficient, and `rpm -V` is useless
+  here: ostree normalises every file mtime to zero, so `rpm -V` reports every
+  file as modified on a pristine image.
+- **GRUB branding has a hard limit.** Since GRUB 2.06, `insmod` is prohibited
+  under Secure Boot — a theme needing a module not already built into Fedora's
+  signed `grubx64.efi` stops the machine at an error prompt, and `grub.cfg` is
+  not RPM-owned so no artifact check covers it. Cedar restricts GRUB branding to
+  `GRUB_BACKGROUND` and `GRUB_THEME`, with the module set verified first.
+
+**Branding also breaks the bootloader path if done naively.** `grub2-switch-to-blscfg`
+derives its EFI directory from os-release (`EFIDIR=$(grep ^ID= …)`) and looks in
+`/boot/efi/EFI/${EFIDIR}/`. Setting `ID=cedar` points it at a directory that does
+not exist, so Cedar must pin `EFIDIR="fedora"`. Bazzite carries the same fix.
+
+NVIDIA's DKMS modules remain the exception — unsigned, and still requiring MOK
+enrollment at a firmware prompt. A one-time annoyance for a single user, and a
+real problem if Cedar ever has general ones.
 
 **Branding.** Baked into the image rather than patched onto a running system:
 `/etc/os-release`, `/etc/issue`, `GRUB_DISTRIBUTOR`, the Plymouth theme, the
@@ -184,17 +218,33 @@ not reliably follow system colours or light/dark. So:
 
 > **COSMIC styles COSMIC. Cedar makes everything else match.**
 
+**What COSMIC already does, and what is therefore Cedar's.** At 1.8,
+`cosmic-settings-daemon` watches the `Theme` config and generates **GTK4 CSS**
+from the palette and **qt5ct/qt6ct** config edits. It used to write kdeglobals
+colour schemes; that was deleted as dead code because it cannot reach Flatpaks.
+So the gap is precise:
+
+| | Owner |
+|---|---|
+| COSMIC's own apps, GTK4 CSS, qt56ct config | COSMIC, free |
+| **GTK3** — upstream writes GTK4 only | **Cedar** |
+| **Qt platform theme** — CuteCosmic, pinned; qt6ct as fallback. Neither is preinstalled | **Cedar** |
+| **`QT_QPA_PLATFORMTHEME` for host and Flatpak** | **Cedar** |
+| **An icon theme with a dark variant** — COSMIC's own icons have none, so upstream falls back to Breeze | **Cedar** |
+| Wallpaper, panel, dock, dock pins | **Cedar** — four `v1` config namespaces |
+
 **Design.** One palette file (colours, accent, three font choices, corner
 radius, wallpaper) is the source of truth. `cedar-theme apply <name>` renders it
-to:
+to the COSMIC `.ron` theme (schema **v2**), the four layout namespaces above,
+GTK3, the Qt platform theme configuration, terminal and editor config, and
+Flatpak theme extensions written as plain local directories.
 
-| Target | Mechanism |
-|---|---|
-| COSMIC | generated `.ron`, the native format |
-| GTK 3/4 | generated colour definitions into a maintained upstream theme |
-| Qt | CuteCosmic's Qt platform theme, or Kvantum if that proves insufficient |
-| Terminal, editor | generated config |
-| Flatpak apps | theme extensions written as plain local directories |
+**One trap to design around.** `cosmic-settings-daemon` watches the derived
+`Theme` object, not `ThemeBuilder`, and it is what triggers the GTK4 and qt56ct
+exports — so Cedar must write `Theme`. But writing only `Theme` leaves the
+newer `transparent_*` keys falling through to Fedora's shipped defaults, which
+mismatches the palette as soon as frosted glass is on. **Cedar generates both,
+consistently.**
 
 **Two constraints carried over from the review, both verified:**
 
@@ -262,22 +312,30 @@ Findings from the five-agent review of the previous design that still apply:
 
 ## Open items
 
-- **Which COSMIC version Fedora 44 currently ships.** It released in April 2026
-  with 1.0.8 while upstream is now at 1.3–1.5. Whether Fedora has updated COSMIC
-  within the release is not documented publicly and must be checked against the
-  repository directly (`dnf info cosmic-desktop`) at milestone 1. This is the
-  same staleness trap that killed the Debian design, so it is worth checking
-  early — but it is far less dangerous here for two reasons: Fedora releases
-  every six months rather than every two years, so the worst case is months of
-  lag rather than years; and the `ryanabx/cosmic-epoch` COPR packages COSMIC for
-  Fedora, giving a fallback that Debian simply did not have for Plasma. If the
-  COPR turns out to be necessary, note that the first design was abandoned partly
-  for depending on third-party COPRs — acceptable for one user, not for a
-  distribution.
-- Whether CuteCosmic is maintained and sufficient for Qt theming, or whether
-  Kvantum is needed.
-- Whether COSMIC's exported `.ron` is a stable enough format to generate
-  against, or whether it changes shape between COSMIC releases.
+**Resolved during review, kept here because the reasoning matters:**
+
+- **COSMIC version — no longer a risk.** Fedora 44 released with COSMIC 1.0.8
+  but has been fed every upstream release since as ordinary updates; **1.8.0
+  went stable on 2026-09-11**. There is no staleness trap and nothing to wait
+  for at Fedora 45. Note that Fedora's `mdapi` reports this wrongly (its
+  branch-to-repo mapping is scrambled) — Koji is the build system of record, and
+  the check that actually settles it is `rpm -q` against the composed image.
+- **CuteCosmic is maintained and is the right choice.** System76 now maintains
+  its packaging and it is in Fedora. Upstream deleted kdeglobals generation
+  precisely because a real Qt platform theme supersedes it. Pin the version —
+  it is still `0.1^git` with no API stability promise — and keep qt6ct as
+  fallback. Kvantum is not needed.
+- **The theme schema is stable enough, in one direction.** `cosmic-theme` went
+  v1→v2 between 1.0.9 and 1.3 (hex colours, a `frosted` subsystem, a new config
+  path), then moved +9 lines across 52 commits to 1.8. Target v2.
+
+**Still open:**
+
+- Upstream COSMIC releases roughly weekly. The churn is in `cosmic-comp` rather
+  than the schemas Cedar writes, but the mitigation should be built early: pin
+  the base image by digest, and add a CI check that diffs the shipped
+  `/usr/share/cosmic/**/default_schema` key names against what Cedar generates,
+  so a schema bump fails the build rather than the desktop.
 - NVIDIA on Fedora Atomic still requires MOK enrollment under Secure Boot. This
   is a one-time annoyance for a single user rather than a blocker, but it should
   be confirmed before choosing hardware.
