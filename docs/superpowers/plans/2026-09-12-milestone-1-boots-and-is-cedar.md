@@ -667,7 +667,18 @@ check_file_exists "Cedar plymouth theme exists" \
 check "plymouth default theme is cedar" "cedar" plymouth-set-default-theme
 check "initramfs regenerated in /usr/lib/modules" "initramfs.img" \
   sh -c 'ls /usr/lib/modules/*/initramfs.img'
+check "os-release DEFAULT_HOSTNAME is cedar" 'DEFAULT_HOSTNAME="cedar"' \
+  cat /usr/lib/os-release
+check "os-release LOGO points at Cedar's logo" 'LOGO=cedar-logo' \
+  cat /usr/lib/os-release
+check "os-release CPE_NAME deliberately still Fedora" 'cpe:/o:fedoraproject' \
+  cat /usr/lib/os-release
 ```
+
+The last assertion looks wrong and is not. `CPE_NAME` is pinned to Fedora on
+purpose — see the Containerfile comment below — and asserting it explicitly
+stops a future contributor from "fixing" it into a CPE that matches no
+vulnerability database.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -708,6 +719,20 @@ Modify `Containerfile`, inserting after the identity layer and **before** `bootc
 COPY branding/wallpapers/ /usr/share/backgrounds/cedar/
 COPY branding/logo/cedar-logo.svg /usr/share/pixmaps/cedar-logo.svg
 COPY branding/plymouth-watermark.png /tmp/cedar-watermark.png
+
+# Two os-release keys deferred from Task 3 until the assets they name exist.
+# LOGO could not be set earlier without pointing at a file that was not yet
+# installed; it is set here, immediately after the logo is COPYed above.
+#
+# CPE_NAME is deliberately LEFT as Fedora's. It feeds CPE-based CVE and asset
+# scanners, and Cedar's packages genuinely ARE Fedora 44 packages, so matching
+# Fedora 44 advisories is the accurate result. A cedarlinux CPE would match no
+# known vulnerability database and make Cedar silently appear vulnerability-free.
+RUN set -eux; \
+    sed -i 's/^DEFAULT_HOSTNAME=.*/DEFAULT_HOSTNAME="cedar"/' /usr/lib/os-release; \
+    sed -i 's/^LOGO=.*/LOGO=cedar-logo/'                      /usr/lib/os-release; \
+    grep -q '^DEFAULT_HOSTNAME="cedar"' /usr/lib/os-release; \
+    grep -q '^LOGO=cedar-logo'          /usr/lib/os-release
 
 # Plymouth. Derived from the stock spinner theme so Cedar inherits a working
 # splash rather than authoring one, then renamed and re-watermarked.
