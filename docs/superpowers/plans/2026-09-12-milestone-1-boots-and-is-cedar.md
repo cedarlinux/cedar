@@ -997,13 +997,21 @@ push builds down with it."
 git push
 ```
 
-- [ ] **Step 7: Watch the run**
+- [ ] **Step 7: Trigger the workflow and watch it**
+
+The workflow triggers on `push` to `main`, and this work is on `milestone-1`, so
+pushing will not fire it. Merging an unverified CI workflow into `main` purely to
+test it is backwards, so use the `workflow_dispatch` trigger the workflow already
+declares — it exercises the identical job graph:
 
 ```bash
-gh run watch
+gh workflow run build.yml --ref milestone-1
+sleep 5 && gh run watch
 ```
 
-Expected: build, both test suites, login, push, sign, and the `verify-public` job.
+Expected: build, both test suites, login, push, sign, and the `verify-public`
+job. The `on: push` trigger needs no change and starts working naturally once
+`milestone-1` merges to `main`.
 
 - [ ] **Step 8: Make the package public**
 
