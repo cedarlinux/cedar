@@ -73,6 +73,12 @@ RUN set -eux; \
            -f "/usr/lib/modules/${KV}/initramfs.img"; \
     chmod 0600 "/usr/lib/modules/${KV}/initramfs.img"
 
+# Signature verification policy. Ships in the image so that `rpm-ostree rebase
+# ostree-image-signed:` works on a running Cedar system.
+COPY cosign.pub /usr/etc/pki/containers/cedar.pub
+COPY branding/policy.json /usr/etc/containers/policy.json
+COPY branding/ghcr.yaml /usr/etc/containers/registries.d/ghcr.yaml
+
 # bootc container lint MUST be the last instruction — it validates the final
 # filesystem. Anything added below it goes unlinted.
 RUN bootc container lint

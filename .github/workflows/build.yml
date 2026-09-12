@@ -1,0 +1,96 @@
+name: Build Cedar image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: cedar
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: false
+
+      # ghcr.io requires a lowercase namespace; github.repository_owner
+      # preserves the account's original casing, so a capitalised username
+      # would fail at push time with "repository name must be lowercase".
+      - name: Compute registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE_REGISTRY=ghcr.io/${OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Build image
+        run: podman build --platform=linux/amd64 --pull=always -t "${IMAGE_NAME}:ci" .
+
+      # CEDAR_BASE is deliberately NOT set here. Task 4's fix round made
+      # boot-chain.sh derive it from the Containerfile's own FROM line, so the
+      # guard is structurally incapable of comparing against an image the build
+      # did not use. Setting it here would reintroduce a second place where the
+      # digest can drift out of sync with the build.
+      - name: Run image tests
+        run: |
+          ./test/test-image.sh "${IMAGE_NAME}:ci"
+          ./test/boot-chain.sh "${IMAGE_NAME}:ci"
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        id: push
+        run: |
+          podman tag "${IMAGE_NAME}:ci" "${IMAGE_REGISTRY}/${IMAGE_NAME}:44"
+          podman tag "${IMAGE_NAME}:ci" "${IMAGE_REGISTRY}/${IMAGE_NAME}:latest"
+          podman push "${IMAGE_REGISTRY}/${IMAGE_NAME}:44"
+          podman push "${IMAGE_REGISTRY}/${IMAGE_NAME}:latest"
+          digest=$(skopeo inspect --format '{{.Digest}}' \
+            "docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:44")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v3
+        if: github.event_name != 'pull_request'
+
+      - name: Sign by digest
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+
+  # A reset of the package's visibility is silent and breaks every user's
+  # rebase. Catch it here instead.
+  verify-public:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          REG="ghcr.io/${OWNER,,}"
+          skopeo inspect "docker://${REG}/cedar:44" > /dev/null
+          echo "Anonymous pull works."

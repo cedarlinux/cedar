@@ -1,0 +1,21 @@
+name: Nightly rebuild
+
+# In its own file deliberately: GitHub disables a workflow after 60 days of
+# repository inactivity, and it disables the ENTIRE FILE. Keeping the schedule
+# here means a lapse stops the weekly rebuild but never stops push builds.
+# The minute is off-the-hour because on-the-hour slots are frequently dropped.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh workflow run build.yml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
